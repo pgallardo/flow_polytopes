@@ -4,6 +4,30 @@ from itertools import product, combinations, permutations
 from itertools import combinations_with_replacement as all_combos
 
 
+def is_a_vertex_permutation_of(A, B):
+    if A.shape != B.shape:
+        return False
+    if np.all(A == B):
+        return True
+
+    Aedges = edges_of_graph(A, True)
+    Bedges = edges_of_graph(B, True)
+
+    # really this is 2*valence, but doesn't matter as long as we're just worrying about uniqueness
+    Avalences = np.column_stack([(abs(A).sum(axis=1) - A.sum(axis=1)), (abs(A).sum(axis=1)+A.sum(axis=1))]).tolist()
+    Bvalences = np.column_stack([(abs(B).sum(axis=1) - B.sum(axis=1)), (abs(B).sum(axis=1)+B.sum(axis=1))]).tolist()
+
+    possible_replacements = [[b for (b, bv) in enumerate(Bvalences) if (bv[0] == av[0] and bv[1] == av[1])] for av in Avalences]
+    paths_to_take = product(*possible_replacements)
+    summedvertices = sum(range(A.shape[0]))
+
+    for path in paths_to_take:
+        if len(path) == len(set(path)) and sum(path) == summedvertices:
+            A_alt = np.row_stack([A[a,:] for a in path])
+            if np.all(A_alt == B):
+                return True
+    return False
+
 def is_a_column_permutation_of(A, B):
     """ checks if two matrices A and B are identical up to permutation of columns
         inputs:
@@ -62,6 +86,18 @@ def generate_graphs(d):
         As = unoriented_unique_up_to_isomorphism(As)
         connectivity_matrices.extend(As)
     return connectivity_matrices
+
+def generate_graphs_for_pair(G0, G1):
+    list_of_aij_possibilities = [[0, 1, 2] for x in range(G0)]
+    all_possible_columns = [x for x in product(*list_of_aij_possibilities) if sum(x) == 2]
+    list_of_col_indices = [list(range(len(all_possible_columns))) for x in range(G1)]
+    all_col_combinations = all_combos(range(len(all_possible_columns)), G1)
+    As = [np.matrix(np.column_stack([all_possible_columns[j] for j in i])) for i in all_col_combinations]
+    As = [A for A in As if np.all(np.array((A.sum(axis=1)) >= 3))]
+
+    # now make sure the graphs are unique up to graph isomorphism
+    As = unoriented_unique_up_to_isomorphism(As)
+    return As
 
 
 # This set of functions deals with part d in the theorem.
@@ -165,20 +201,34 @@ def all_edges_in_a_cycle(edge_list):
 
 # FOR ORIENTED GRAPH CYCLE CHECKING
 def exists_cycle(edge_list, vertex_list):
-    visited = [0 for x in vertex_list]
-    v = edge_list[0][0]
-    visited[v] = 1
-    return dfs_find_cycle(v, visited, edge_list)
+    exists_cycle = False
+
+    for v in range(len(vertex_list)):
+        visited = [0 for x in vertex_list]
+        visited[v] = 1
+
+        if dfs_find_cycle(v, visited, edge_list):
+            exists_cycle = True
+            break
+
+    return exists_cycle
 
 
 # FOR ORIENTED GRAPH CYCLE CHECKING
 def dfs_find_cycle(starting_vertex, visited, edge_list):
-    for e_index, e in edges_out_of(starting_vertex, edge_list, oriented=True):
+    to_return = False
+    edges = edges_out_of(starting_vertex, edge_list, oriented=True)
+    for e_index, e in edges:
         if visited[e[1]]:
-            return True
-        visited[e[1]] = 1
-        return dfs_find_cycle(e[1], visited, edge_list)
-    return False
+            to_return = True
+            break
+        new_visited = [x for x in visited]
+        new_visited[e[1]] = 1
+        success = dfs_find_cycle(e[1], new_visited, edge_list)
+        if success:
+            to_return = True
+            break
+    return to_return
 
 
 # checks if a graph(represented by node_list and edge_list)is connected
@@ -204,6 +254,7 @@ def graph_from_edges(Es):
         A[e[0], i] = -1
         A[e[1], i] = 1
     return A
+
 
 # returns list of tuples of the form (node1, node2) that corresponds to 
 # an edge between node1 and node2. Loops are represented as (node1,node1)
@@ -280,7 +331,7 @@ def primal_undirected_cycle(G):
 
 
 def flow_polytope(Q, W=None):
-    """ return the vertices of the flow polytope associated to the quiver Q
+    """ return the vertices of the dual of the flow polytope associated to the quiver Q
     input: Q(numpy matrix): #vertices x #arrows matrix corresponding to quiver Q
     output: vertices: list of vertices comprising the convex hull of the flow polytope
     """
@@ -294,11 +345,11 @@ def flow_polytope(Q, W=None):
 
     f = []
     for i, edge in enumerate(edges_removed):
-        cycle = primal_undirected_cycle(T+[edge])
+        cycle = primal_undirected_cycle(T + [edge])
 
         # now replace the indices in cycle that are for edge so as to match indexing on list(edges)
         #to_replace = {len(T):len(T)+i, -(len(T)+1):-(len(T)+i+1)}
-        cycle = [x+i if x == len(T) else -(len(T) + i + 1) if x == -(len(T) + 1) else x for x in cycle]
+        cycle = [x + i if x == len(T) else -(len(T) + i + 1) if x == -(len(T) + 1) else x for x in cycle]
 
         fi = np.zeros(len(edges))
         for j in cycle:
@@ -309,6 +360,7 @@ def flow_polytope(Q, W=None):
         f.append(fi)
     vertices = [list(f[i][j] for i in range(len(edges_removed))) for j in range(len(edges))]
     return vertices
+
 
 def Step1(n):
     # obtain matrices for all graphs with d=n
@@ -332,7 +384,7 @@ def Step2(mat):
                     pairs.append((r,c))
 
         for pair in pairs:
-            A[pair[0],pair[1]] = 1
+            A[pair[0], pair[1]] = 1
             col_to_add = A[:, pair[1]]
 
             A = np.append(A, col_to_add, axis=1)
@@ -400,7 +452,7 @@ def Step4(mat):
         mats = [np.column_stack((base_mat, np.column_stack(A))) for A in [[possible_columns[i][y] for i, y in enumerate(x)] for x in col_choices]]
 
     #save only the graphs that are cycle-free
-    mats = [-x for x in mats if not exists_cycle(edges_of_graph(x, True), range(x.shape[0]))]
+    mats = [-x for x in mats if not exists_cycle(edges_of_graph(-x, True), range(x.shape[0]))]
     return unoriented_unique_up_to_isomorphism(mats)
 
 
@@ -438,7 +490,7 @@ def Step5(mats):
     return [m for i, m in enumerate(mats) if not to_remove[i]]
 
 
-def all_possible_graphs(d):
+def acyclic_quivers(d):
     graphs = Step1(d)
 
     step2_graphs, loops_broken = zip(*[Step2(A) for A in graphs])
@@ -463,3 +515,162 @@ def all_possible_graphs(d):
     step5_graphs = Step5(step4_graphs)
 
     return step5_graphs
+
+
+def subquivers(M):
+    """
+    input: M(numpy matrix): connectivity matrix of some quiver Q
+    output: L(list of matrices): all subquivers of M with same vertices
+    """
+    num_arrows = M.shape[1]
+    arrows = range(num_arrows)
+    L = [M[:,j] for i in arrows[1:] for j in combinations(arrows, i)]
+    return L
+
+
+
+def subsets_closed_under_arrows(M):
+    """
+    v.1: sum matrix columns
+
+    input: M(numpy matrix): connetivity matrix of some quiver Q
+
+    output: list of tuples(corresponding to vertices)
+            all subsets of the vertices of Q that are closed under arrows.
+            i.e. S subset Q0 such that for v in S, the arrows in Q with
+            tail v have head in S
+    """
+    num_vertices = M.shape[0]
+    vertices = range(num_vertices)
+    return [j for i in range(1, num_vertices) for j in combinations(vertices, i) if np.all(M[j,:].sum(axis=0) <= 0)]
+
+
+
+def theta(M):
+    """
+    input: M(numpy matrix): weighted connectivity matrix of some quiver Q
+
+    output: theta(list): ordered list of weights for the vertices of Q
+    """
+    return [x for x in M.sum(axis=1).flatten().tolist()[0]]
+
+
+
+def is_stable(M, subM):
+    """
+    inputs: M(numpy matrix): weighted connectivity matrix of some quiver Q
+            subM(list): subset of the indices[0,...,#columns of M] corresponding to the arrows of the subquiver
+
+    output: boolean of statement "M is W-stable"
+    """
+    vertices = list(set(r for r in range(M.shape[0]) if np.any(np.array([M[r,c] != 0 for c in subM])))) #of the subquiver
+    theta_calc = theta(M)
+    weights = [theta_calc[i] for i in vertices]
+
+    submatrix = M[np.array(vertices),:]
+    submatrix = submatrix[:,subM]
+    # calculate the weight sums for each subset of M that is closed under arrows
+    sums = np.array([sum(np.array(weights)[np.array(S)]) for S in subsets_closed_under_arrows(submatrix)])
+    return np.all(sums > 0)
+
+
+
+def all_unstable(M):
+    """
+    inputs: M(numpy matrix): connectivity matrix of some quiver Q
+            W(list or numpy array): list of weights
+
+    output: list of all unstable (wrt W) subquivers of M that are closed under arrows
+    NOTE: unstable in this context includes things that are not stable i.e. unstable and semi-stable.
+    """
+    num_arrows = M.shape[1]
+    arrows = range(num_arrows)
+    L = [list(j) for i in arrows[1:] for j in combinations(arrows, i)]
+    return [subQ for subQ in L if not is_stable(M, list(subQ))]
+
+
+
+def contained_in(Q1, Q2):
+    """check if Q1 is a subset of Q2
+        inputs: two lists of vertices(interpreted as subquivers)
+        output: boolean evaluating the statement Q1 subset of Q2
+    """
+    if np.array_equal(Q1, Q2):
+        return False
+    if len([x for x in Q1 if x in Q2]) == len(Q1):
+        return True
+    return False
+
+
+def all_maximal_unstable(M):
+    """
+    """
+    # all unstable subquivers of M closed under arrows
+    # NOTE: unstable in this context includes things that are not stable i.e. unstable and semi-stable.
+    unstable_list = all_unstable(M)
+
+    answer = []
+    for Q in unstable_list:
+        maximal = True
+        for Q_other in unstable_list:
+            if contained_in(Q, Q_other):
+                maximal = False
+        if maximal:
+            answer.append(Q)
+    return answer
+
+
+def is_tight(Q):
+    """
+    input: Q(weighted connectivity matrix for quiver)
+    output: boolean of statement "Q is tight"
+    """
+    n_arrows = Q.shape[1]
+    return np.all([len(x) != (n_arrows - 1) for x in all_maximal_unstable(Q)])
+
+
+def neighborliness(Q):
+    max_unstables = all_maximal_unstable(Q)
+    n = [len(m) for m in max_unstables] + [0]
+    return Q.shape[1] - max(n)
+
+
+def merge_on_vertex(A1, v1, A2, v2):
+    # shape of output matrix
+    nrow = A1.shape[0] + A2.shape[0] - 1
+    ncol = A1.shape[1] + A2.shape[1]
+
+    # permute input matrices so row a1 is at bottom of A1, and 
+    # row a2 is at top of A1.easier to merge that way
+    Q1 = np.row_stack([A1[:v1], A1[v1+1:], A1[v1]])
+    Q2 = np.row_stack([A2[v2], A2[:v2], A2[v2+1:]])
+
+    # create dummy matrix to hold output
+    A = np.zeros((nrow, ncol))
+    A[:A1.shape[0], :A1.shape[1]] = Q1
+    A[A1.shape[0]-1:, A1.shape[1]:] = Q2
+    
+    return A
+
+
+def merge_on_arrow(A1, a1, A2, a2):
+    # shape of output matrix
+    nrow = A1.shape[0] + A2.shape[0] - 2
+    ncol = A1.shape[1] + A2.shape[1] - 1
+
+    # get local indices of vertices associated to the edge
+    q1_e = edges_of_graph(A1, oriented=True)[a1]
+    q2_e = edges_of_graph(A2, oriented=True)[a2]
+
+    # permute A1 so that column a1 and rows associated to edge a1 are at bottom
+    Q1 = np.column_stack([A1[:,:a1], A1[:,a1+1:], A1[:,a1]])
+    Q1 = np.row_stack([Q1[x] for x in range(Q1.shape[0]) if x not in q1_e] + [Q1[q1_e[0]], Q1[q1_e[1]]])
+
+    # permute A2 so that column a2 and rows associated to edge a2 are at top
+    Q2 = np.column_stack([A2[:,:a2], A2[:,a2+1:]])
+    Q2 = np.row_stack([Q2[q2_e[0]], Q2[q2_e[1]]] + [Q2[x] for x in range(Q2.shape[0]) if x not in q2_e])
+
+    A = np.zeros((nrow, ncol))
+    A[:A1.shape[0], :A1.shape[1]] = Q1
+    A[A1.shape[0]-2:,A1.shape[1]:] = Q2
+    return A

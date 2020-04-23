@@ -14,14 +14,18 @@ newPackage(
 export {
 -- Methods/Functions
     "sampleQuiver",
-    "toricQuivers", 
+    "toricQuivers",
     "isTight",
-    "subQuivers", 
+    "subquivers",
     "subsetsClosedUnderArrows",
     "isStable",
     "isMaximal",
     "maximalUnstableSubquivers",
-    "theta", 
+    "theta",
+    "neighborliness",
+    "flowPolytope",
+    "graphEdges",
+    "graphFromEdges",
 -- Options
     "Axis",
     "SavePath",
@@ -358,9 +362,8 @@ existsOrientedCycle = (G) -> (
 ------------------------------------------------------------
 isPathBetween = {Oriented => false, SavePath => false, EdgesAdded => {}} >> opts -> (p, q, E) -> (
     ifPath := false;
-    Path := {};
     existsPath := false;
-    currentPath := {};
+    currentEdges := {};
     pathsToSee := edgesOutOfPoint(p, E, Oriented => opts.Oriented);
 
     for edge in pathsToSee do (
@@ -372,7 +375,7 @@ isPathBetween = {Oriented => false, SavePath => false, EdgesAdded => {}} >> opts
             v = e#0;
         );
         if opts.SavePath then (
-            currentEdges := append(toList(opts.EdgesAdded), {p, v});
+            currentEdges = append(toList(opts.EdgesAdded), {p, v});
         );
 
         if q == v then (
@@ -380,25 +383,27 @@ isPathBetween = {Oriented => false, SavePath => false, EdgesAdded => {}} >> opts
             break;
         )
         else (
+            thisPath := {};
             remainingEdges := for j from 0 to #E - 1 list(if j == i then (continue;) else E#j);
 
             if opts.SavePath then (
-                (ifPath, Path) = isPathBetween(v, q, remainingEdges, Oriented => opts.Oriented, SavePath => true, EdgesAdded => currentEdges);
+                (ifPath, thisPath) = isPathBetween(v, q, remainingEdges, Oriented => opts.Oriented, SavePath => true, EdgesAdded => currentEdges);
             )
             else (
                 ifPath = isPathBetween(v, q, remainingEdges, Oriented => opts.Oriented, EdgesAdded => currentEdges);
             );
             if ifPath then (
                 existsPath = true;
+                currentEdges = currentEdges | thisPath;
                 break;
             );
         );
     );
     if opts.SavePath then (
-        (existsPath, currentPath)
+        return (existsPath, currentEdges);
     )
     else (
-        existsPath
+        return existsPath;
     )
 )
 ------------------------------------------------------------
@@ -715,7 +720,7 @@ isStable = (Q, subQ) -> (
             sumList(weights_subset)
         )
     );
-    all(sums, x -> x > 0)
+    all(sums, x -> x < 0)
 )
 ------------------------------------------------------------
 
@@ -756,7 +761,7 @@ isMaximal = (Q, Qlist) -> (
     returnVal := true;
     for Q2 in Qlist do (
         if isProperSubset(Q, Q2) then (
-            returnVal := false;
+            returnVal = false;
         );
     );
     returnVal
@@ -771,7 +776,7 @@ maximalUnstableSubquivers = (Q) -> (
         isMaximal := true;
         for subQ2 in unstableList do (
             if isProperSubset(subQ1, subQ2) then (
-                isMaximal := false;
+                isMaximal = false;
             );
         );
         if isMaximal then (
@@ -788,5 +793,148 @@ maximalUnstableSubquivers = (Q) -> (
 isTight = (Q) -> (
     numArrows := #entries(transpose(Q));
     all(maximalUnstableSubquivers(Q), x -> #x != (numArrows - 1))
+)
+------------------------------------------------------------
+
+
+------------------------------------------------------------
+neighborliness = (Q) -> (
+    numArrows := #entries(transpose(Q));
+    maxUnstables := maximalUnstableSubquivers(Q);
+
+    k := max(
+        for sQ in maxUnstables list(
+            numArrows - #sQ
+        )
+    );
+    k
+)
+------------------------------------------------------------
+
+
+------------------------------------------------------------
+-- Returns a spanning tree(the first one that is encountered) of 
+-- the quiver Q with |Q_1| - |Q_0| + 1 edges removed. 
+-- NOTE: if such a spanning tree is not possible, then it returns empty lists
+--
+-- input: 
+--     - Q: Matrix representation of quiver
+-- outputs:
+--     - edges_kept(list of tuples): list of the edges in the spanning tree
+--     - edges_removed(list of tuples)): list of the edges in the complement of the spanning tree
+--
+spanningTree = (Q) -> (
+    Q0 := #entries(Q);
+    Q1 := #entries(transpose(Q));
+
+    --  edges of quiver Q represented as a list of tuples
+    allEdges := graphEdges(Q, Oriented => true);
+    allNodes := asList(0..Q0-1);
+
+    -- number of edges to remove from spanning tree
+    d := Q1 - Q0 + 1;
+
+    dTuplesToRemove := combinations(d, asList(0..#allEdges-1), Replacement => false);
+    for dTuple in dTuplesToRemove do (
+        edgesKept := drop(allEdges, dTuple);
+        edgesRemoved := allEdges_dTuple;
+
+        reducedG := transpose(matrix(for e in edgesKept list(
+            t := e#0;
+            h := e#1;
+            localE := asList(Q0:0);
+            localE = replaceInList(h,  1, localE);
+            localE = replaceInList(t, -1, localE);
+            localE
+        )));
+        if isGraphConnected(reducedG) then (
+            return (edgesKept, edgesRemoved);
+        );
+    );
+    return ({}, {});
+)
+------------------------------------------------------------
+
+
+------------------------------------------------------------
+isIn = (v, l) -> (
+    p := positions(l, x -> x == v);
+    #p > 0
+)
+------------------------------------------------------------
+
+
+------------------------------------------------------------
+-- gives the edges that comprise an undirected cycle in the graph G, 
+-- (which is assumed to contain a single cycle) and returns the ordered cycle
+
+--  input: G(list of tuples): edges of graph G
+--  output: cycle(list of tuples): tuple representation of the edges contained in the cycle
+primalUndirectedCycle = (G) -> (
+    for i from 0 to #G - 1 do (
+        edge := G#i;
+        (isCycle, cycle) := isPathBetween(edge#1, edge#0, drop(G, {i, i}), 
+                                          Oriented => false, SavePath => true, EdgesAdded => {edge});
+        if isCycle then (
+            edgeIndices := {};
+            metEdges := {};
+
+            for cE in cycle do (
+                for gI in asList(0..#G - 1) do (
+                    if isIn(gI, metEdges) then (
+                        continue;
+                    ) else (
+                        gE := G#gI;
+                        if (gE#0 == cE#0) and (gE#1 == cE#1) then (
+                            metEdges = metEdges | {gI};
+                            edgeIndices = edgeIndices | {gI};
+                        )
+                        else if (gE#1 == cE#0) and (gE#0 == cE#1) then (
+                            metEdges = metEdges | {gI};
+                            edgeIndices = edgeIndices | {-(gI+1)};
+                        );
+                    );
+                );
+            );
+        );
+        return edgeIndices;
+    );
+    return {};
+)
+------------------------------------------------------------
+
+
+------------------------------------------------------------
+flowPolytope = (Q) -> (
+
+    (sT, removedEdges) := spanningTree(Q);
+    es := sT | removedEdges;
+    Ws := #es:1;
+
+    f := for i from 0 to #removedEdges - 1 list(
+        edge := removedEdges#i;
+        cycle := primalUndirectedCycle(sT | {edge});
+
+        cycle = for x in cycle list(
+            if x == #sT then (x+i) else if x == -(#sT + 1) then (-#sT - i - 1) else (x)
+        );
+
+        fi := #es:0;
+        for j in cycle do (
+            if j >= 0 then (
+                fi = replaceInList(j, Ws#j, fi)
+            ) else (
+                k := -(1 + j);
+                fi = replaceInList(k, -Ws#k, fi)
+            );
+        );
+        fi
+    );
+    for j from 0 to #es - 1 list(
+        for i from 0 to #removedEdges - 1 list(
+            ff := f#i;
+            ff#j
+        )
+    )
 )
 ------------------------------------------------------------
